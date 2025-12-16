@@ -1,0 +1,17 @@
+# For making HTTP requests to target websites
+requests
+
+# For parsing HTML content (used by LeadExtractor)
+beautifulsoup4
+
+# For web automation (used by ScrapingHandler to perform initial searches)
+selenium
+
+# Optional: If you use the older Python 3.x regex engine
+# You may need to install this if your default environment is older
+# re is a built-in module, but if you used a specific regex library, include it here.
+
+# Optional: Add the specific web driver for Selenium (e.g., if you use Firefox)
+# If you are managing the driver separately, you don't need this, but it's good practice
+# to include a library that fetches and manages the driver.
+# webdriver-manager

@@ -15,6 +15,13 @@ from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 ## 1. ScrapingHandler Class (Maira's Task)
+import queue
+# Initialize the log queue globally
+LOG_QUEUE = queue.Queue()
+
+def log_status(message: str):
+    """Safely puts a status message into the queue for Streamlit to read."""
+    LOG_QUEUE.put(message)
 
 class ScrapingHandler:
     """
@@ -45,7 +52,7 @@ class ScrapingHandler:
             try:
                 alert = driver.switch_to.alert
                 alert.accept()
-                print("Alert accepted")
+                log_status("Alert accepted")
             except:
                 pass
             WebDriverWait(driver, 8).until(
@@ -79,16 +86,16 @@ class ScrapingHandler:
 
                 if href.startswith("http") and "duckduckgo.com" not in href and href not in results:
                     results.append(href)
-                print(f"✅ Found {len(results)} real URLs")
+                log_status(f"✅ Found {len(results)} real URLs")
             return results
         
         except requests.exceptions.RequestException as e:
-            print(f"❌ Request Error for {url}: {e}")
+            log_status(f"❌ Request Error for {url}: {e}")
             return None
         finally:
             driver.quit()
 
-    def scrape_keyword(self, keyword: str,max_results: int = 10) -> list[str]:
+    def scrape_keyword(self, keyword: str,max_results: int = 5) -> list[str]:
         """
         Constructs the search URL for a given keyword and fetches the HTML content.
         """
@@ -96,19 +103,18 @@ class ScrapingHandler:
                 search_query = requests.utils.quote(keyword)
                 full_url = f"{self.BASE_URL}{search_query}"
                 
-                print(f"🔍 Starting scrape for keyword: '{keyword}'")
+                log_status(f"🔍 Starting scrape for keyword: '{keyword}'")
                 
                 return self.make_request(full_url,max_results)
         except Exception as e:
-                print(f"❌ Error during scraping for keyword '{keyword}': {e}")
+                log_status(f"❌ Error during scraping for keyword '{keyword}': {e}")
                 return None
-
-
+    
 
 
 # # Example usage:
 # scraper = ScrapingHandler()
 # html_content = scraper.scrape_keyword("Fragrance",max_results=20)
 # for i in html_content:
-#     print(i)
+#     log_status(i)
 
