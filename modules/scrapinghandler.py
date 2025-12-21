@@ -8,6 +8,8 @@ from selenium import webdriver
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.common.by import By
+from webdriver_manager.firefox import GeckoDriverManager
+from selenium.webdriver.firefox.service import Service
 from modules.Lead import Lead
 import time
 from selenium.webdriver.common.by import By
@@ -45,7 +47,8 @@ class ScrapingHandler:
         """
         try:
             options=Options()
-            driver = webdriver.Firefox(options=options)
+            service = Service(GeckoDriverManager().install())
+            driver = webdriver.Firefox(service=service, options=options)
 
             driver.get(url)
             time.sleep(1)

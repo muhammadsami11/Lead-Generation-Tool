@@ -15,3 +15,9 @@ selenium
 # If you are managing the driver separately, you don't need this, but it's good practice
 # to include a library that fetches and manages the driver.
 # webdriver-manager
+
+# For the Streamlit web interface
+streamlit
+
+# For authentication
+streamlit-authenticator

@@ -29,6 +29,11 @@ class LeadORM(Base):
     email = Column(String(255), nullable=True)
     website_url = Column(String(512), unique=True, nullable=False)
     scraped_at = Column(String(50), nullable=True)
+    instagram_id = Column(String(255), nullable=True)
+    is_email_valid = Column(Integer, default=0)  # 0=False, 1=True
+    is_insta_valid = Column(Integer, default=0)
+    is_lead_valid = Column(Integer, default=0)
+    keyword = Column(String(255), nullable=True)  # Add keyword column for caching
 
     def to_dict(self):
         """Converts the ORM object to a dictionary for external use."""
@@ -37,6 +42,11 @@ class LeadORM(Base):
             'email': self.email,
             'website_url': self.website_url,
             'scraped_at': self.scraped_at,
+            'instagram_id': self.instagram_id,
+            'is_email_valid': bool(self.is_email_valid),
+            'is_insta_valid': bool(self.is_insta_valid),
+            'is_lead_valid': bool(self.is_lead_valid),
+            'keyword': self.keyword,
         }
 
     def __repr__(self):
@@ -71,7 +81,7 @@ class DatabaseManager:
         # Create a configured Session class
         self.Session = sessionmaker(bind=self.engine)
 
-    def add_all_leads(self, leads: List[Lead]) -> int:
+    def add_all_leads(self, leads: List[Lead], keyword: str = None) -> int:
         """
         Adds a list of Lead objects to the database, skipping duplicates.
         """
@@ -89,7 +99,12 @@ class DatabaseManager:
                         name=lead.title, 
                         email=getattr(lead, 'email', None),
                         website_url=lead.source_url,
-                        scraped_at=lead.scraped_at
+                        scraped_at=lead.scraped_at,
+                        instagram_id=getattr(lead, 'instagram_id', None),
+                        is_email_valid=getattr(lead, 'is_email_valid', False),
+                        is_insta_valid=getattr(lead, 'is_insta_valid', False),
+                        is_lead_valid=getattr(lead, 'is_lead_valid', False),
+                        keyword=keyword
                     )
                     orm_objects.append(orm_lead)
                     new_leads_added += 1
@@ -142,15 +157,11 @@ class DatabaseManager:
     def get_leads_by_keyword(self, keyword: str) -> List[dict]:
         """
         Retrieves all leads previously stored under a given keyword.
-        
-        NOTE: This assumes your LeadORM model stores the search keyword 
-        as an attribute (e.g., LeadORM.keyword).
         """
         session = self.Session()
         try:
             # Query where the stored keyword matches the search keyword
-            # Example query (assuming a 'keyword' column exists):
-            leads = session.query(LeadORM).filter(LeadORM.keyword.contains(keyword)).all()
+            leads = session.query(LeadORM).filter(LeadORM.keyword == keyword).all()
             
             # Convert ORM objects to dicts
             return [lead.to_dict() for lead in leads]

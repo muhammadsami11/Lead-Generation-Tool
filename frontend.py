@@ -7,16 +7,17 @@ import random
 import os
 from typing import List, TypeVar
 # NOTE: Ensure all these modules are available in your environment
-from scrapinghandler import ScrapingHandler
-from leadExtractor import LeadExtractor
-from database_manager import DatabaseManager 
-from keywordmodule import keywordmodule
+from modules.scrapinghandler import ScrapingHandler
+from modules.leadExtractor import LeadExtractor
+from modules.database_manager import DatabaseManager 
+from modules.keywordmodule import keywordmodule
 from leadgenerationtool import LeadGenerationTool 
-from LeadValidator import LeadValidator
+from modules.LeadValidator import LeadValidator
+from modules.shared_log import LOG_QUEUE, log_status
 import yaml
 import streamlit_authenticator as stauth
 from yaml import SafeLoader
-with open('../credentials.yaml') as file: 
+with open('credentials.yaml') as file: 
     config = yaml.load(file, Loader=SafeLoader)
 
 authenticator = stauth.Authenticate(
@@ -25,12 +26,14 @@ authenticator = stauth.Authenticate(
     config['cookie']['key'],
     config['cookie']['expiry_days']
 )
+
+# Handle authentication
 try:
-    # Use 'unrendered' to obtain authentication tuple, then render the visible login widget
-    name, authentication_status, username = authenticator.login('unrendered', key='Login')
-    # Ensure the visible login form is rendered for user interaction
-    authenticator.login('main', key='Login_render')
-    if authentication_status:
+    authenticator.login(location='main')
+except Exception as e:
+    st.error(e)
+
+if st.session_state.get('authentication_status'):
     # --- GLOBAL LOGGING & THREAD SETUP (shared via modules.shared_log) ---
 
         def update_frontend_log():
@@ -69,13 +72,13 @@ try:
                     validator=validator
                 )
                 log_status("✅ Backend components initialized and cached.")
-                return lead_tool, storage
+                return lead_tool, storage, extractor
             except Exception as e:
                 log_status(f"❌ FATAL ERROR during backend initialization: {e}")
                 print(f"FATAL ERROR during backend initialization: {e}")
                 return None, None
 
-        def run_extraction_process_in_thread(keywords_list, lead_tool, db_storage, max_visits, max_depth):
+        def run_extraction_process_in_thread(keywords_list, lead_tool, db_storage, extractor, max_visits, max_depth):
             """
             Wrapper function to run the process in a separate thread.
             This function orchestrates the keyword processing loop.
@@ -84,10 +87,10 @@ try:
                 log_status("--- STARTING INTELLIGENT SCRAPE ---")
                 
                 # 1. Set Global Limits on Extractor before starting search
-                if hasattr(lead_tool.extractor, 'MAX_VISITS'):
-                    lead_tool.extractor.MAX_VISITS = max_visits
-                if hasattr(lead_tool.extractor, 'MAX_DEPTH'):
-                    lead_tool.extractor.MAX_DEPTH = max_depth
+                if hasattr(extractor, 'MAX_VISITS'):
+                    extractor.MAX_VISITS = max_visits
+                if hasattr(extractor, 'MAX_DEPTH'):
+                    extractor.MAX_DEPTH = max_depth
                 
                 all_final_leads_data = []
                 
@@ -102,28 +105,32 @@ try:
                     # Use the permanent database for cache lookup
                     cached_leads = db_storage.get_leads_by_keyword(clean_keyword)
                     
-                    if cached_leads:
-                        log_status(f"✅ Found {len(cached_leads)} leads for '{clean_keyword}' in database. Skipping scrape.")
+                    if cached_leads and len(cached_leads) > 0:
+                        log_status(f"✅ Found {len(cached_leads)} cached leads for '{clean_keyword}' in database.")
+                        log_status(f"📋 Using cached data - skip Google search for '{clean_keyword}'")
                         all_final_leads_data.extend(cached_leads)
                         continue
+                    else:
+                        log_status(f"📭 No cached leads found for '{clean_keyword}' in database.")
                         
-                    # --- FALLBACK TO SCRAPER (CORRECT ORCHESTRATION) ---
-                    log_status(f"🔍 No leads found in DB. Starting A* search for '{clean_keyword}'...")
+                    # --- SEARCH GOOGLE SINCE NO CACHED DATA ---
+                    log_status(f"🌐 Searching Google for leads related to '{clean_keyword}'...")
                     
-                    # CRITICAL FIX 2: Call the orchestrator method (process_keyword) 
-                    # which handles the scrape, extraction, and internal storage.
-                    # We set max_seed_urls=10 for the initial Google search results.
-                    # max_retries=2 means we try up to 3 times on timeout errors.
-                    lead_tool.process_keyword(
-                        keyword=clean_keyword,
-                        extractor_instance=extractor
-                    )
-
-                    # Note: Storage is already handled inside lead_tool.process_keyword
-                    # No need to manually convert here; we'll fetch all from DB at the end
+                    try:
+                        # CRITICAL FIX 2: Call the orchestrator method (process_keyword) 
+                        # which handles the scrape, extraction, and internal storage.
+                        lead_tool.process_keyword(
+                            keyword=clean_keyword,
+                            extractor_instance=extractor
+                        )
+                        log_status(f"✅ Google search and lead extraction completed for '{clean_keyword}'")
+                        log_status(f"💾 Leads saved to database for future searches")
+                    except Exception as e:
+                        log_status(f"❌ Error during Google search for '{clean_keyword}': {str(e)}")
+                        continue
                 
                 # --- FINAL RESULTS: Fetch all leads from database ---
-                log_status("\n📊 Fetching all extracted leads from database...")
+                log_status("\n📊 Fetching extracted leads from database...")
                 all_leads_from_db = db_storage.get_all_leads()
                 
                 if all_leads_from_db:
@@ -140,10 +147,11 @@ try:
                         except Exception as e:
                             log_status(f"⚠️ Failed to convert lead: {e}")
                     
-                    log_status(f"✅ Retrieved {len(all_final_leads_data)} total leads from database.")
+                    log_status(f"✅ Retrieved {len(all_final_leads_data)} total leads from database")
+                    log_status("💡 Note: Results include all previously extracted leads")
                 else:
                     all_final_leads_data = []
-                    log_status("⚠️ No leads found in database after scraping.")
+                    log_status("⚠️ No leads found in database after processing")
                 
                 st.session_state['results'] = all_final_leads_data
                 st.session_state['execution_status'] = "Success"
@@ -156,7 +164,7 @@ try:
 
 
         # --- INITIALIZE GLOBAL VARIABLES ---
-        lead_tool, db_storage = initialize_backend()
+        lead_tool, db_storage, extractor = initialize_backend()
 
         # Initialize Session State
         if 'results' not in st.session_state:
@@ -188,6 +196,7 @@ try:
 
         # --- SIDEBAR (SETTINGS) ---
         with st.sidebar:
+            authenticator.logout(location='main')
             st.header("⚙️ Search Configuration")
             
             # Ensure `is_running` is always a boolean. Use getattr to safely call is_alive()
@@ -263,7 +272,7 @@ try:
                     st.session_state['execution_status'] = "Processing..."
                     
                     # --- START NEW THREAD FOR BACKEND WORK ---
-                    thread_args = (keyword_list, lead_tool, db_storage, max_visits, max_depth)
+                    thread_args = (keyword_list, lead_tool, db_storage, extractor, max_visits, max_depth)
                     
                     st.session_state['scraping_thread'] = threading.Thread(
                         target=run_extraction_process_in_thread, 
@@ -343,9 +352,9 @@ try:
 
             else:
                 st.info("No successful results to display yet. Start a new search using the 'Start New Extraction' tab.")
-    elif authentication_status == False:
+
+else:
+    if st.session_state.get('authentication_status') is False:
         st.error('Username/password is incorrect')
-    elif authentication_status == None:
+    elif st.session_state.get('authentication_status') is None:
         st.warning('Please enter your username and password')
-except Exception as e:
-    st.error(f'Authentication error: {e}')

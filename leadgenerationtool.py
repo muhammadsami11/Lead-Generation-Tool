@@ -4,20 +4,22 @@ from modules.leadExtractor import LeadExtractor
 # 💥 CRITICAL FIX: Replace TemporaryStorage with the permanent DatabaseManager
 from modules.database_manager import DatabaseManager 
 from modules.keywordmodule import keywordmodule
+from modules.LeadValidator import LeadValidator
 from typing import TypeVar
 
 # Define the type alias for clarity
 StorageType = TypeVar('StorageType', bound=DatabaseManager)
 
 class LeadGenerationTool:
-    def __init__(self, input_module: keywordmodule, scraper: ScrapingHandler, storage: StorageType):
+    def __init__(self, input_module: keywordmodule, scraper: ScrapingHandler, storage: StorageType, validator: LeadValidator):
         """
         Initializes the tool with dependencies.
         The storage dependency is now explicitly the persistent DatabaseManager.
         """
         self.input_module = input_module
         self.scraper = scraper
-        self.storage = storage 
+        self.storage = storage
+        self.validator = validator
         print("🔧 LeadGenerationTool initialized.")
 
     def process_keyword(self, keyword: str, extractor_instance: 'LeadExtractor') -> None:
@@ -36,11 +38,17 @@ class LeadGenerationTool:
         
         extracted_leads = extractor_instance.extract_lead_info(clean_urls)
         
+        # 2.5. Validate the extracted leads
+        if extracted_leads:
+            print(f"🔍 Validating {len(extracted_leads)} leads...")
+            for lead in extracted_leads:
+                self.validator.validate_lead(lead)
+        
         # 3. Store the extracted leads using the DatabaseManager
         if extracted_leads:
             # 💥 CRITICAL FIX: Use the efficient add_all_leads method from DatabaseManager
-            count = self.storage.add_all_leads(extracted_leads) 
-            print(f"✅ Successfully extracted and stored {count} leads for '{keyword}'.")
+            count = self.storage.add_all_leads(extracted_leads, keyword=keyword) 
+            print(f"✅ Successfully extracted, validated, and stored {count} leads for '{keyword}'.")
         else:
             print(f"⚠️ No leads extracted for '{keyword}'.")
 
@@ -72,33 +80,22 @@ class LeadGenerationTool:
         final_leads_count = len(self.storage.get_all_leads())
         print(f"\n✅ Lead Generation Process Complete! Total leads stored: {final_leads_count}")
 
+import subprocess
+import sys
+import os
+
 if __name__ == "__main__":
-    # Initialize dependencies
-    input_module = keywordmodule()
-    scraper = ScrapingHandler()
-    
-    # 💥 FIX: Initialize the permanent DatabaseManager instead of TemporaryStorage
-    storage = DatabaseManager()
-    extractor = LeadExtractor()
-    
-    # Get user input and set the keywords list
-    search_keyword=input("Enter your keywords separated by commas: ")
-    input_module.keywords=search_keyword.split(",") 
-    
-    # Pass dependencies to the constructor
-    lead_tool = LeadGenerationTool(
-        input_module=input_module, 
-        scraper=scraper, 
-        storage=storage
-    )
-    
-    # Run the lead generation process
-    lead_tool.run(extractor_instance=extractor)
-    
-    # Fetch and print results from the Database Manager
-    storage_leads = storage.get_all_leads()
-    print("\n--- Final Results from Database ---")
-    for lead in storage_leads:
-        # Leads retrieved are ORM objects, so use .to_dict() defined in the ORM model
-        print(lead.to_dict()) 
-    print("-----------------------------------")
+    # Launch the Streamlit frontend
+    print("🚀 Launching Lead Generation Tool Frontend...")
+    try:
+        # Get the directory of the current script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        frontend_path = os.path.join(script_dir, 'frontend.py')
+        
+        # Run streamlit
+        subprocess.run([
+            sys.executable, '-m', 'streamlit', 'run', frontend_path
+        ], cwd=script_dir)
+    except Exception as e:
+        print(f"❌ Failed to launch frontend: {e}")
+        print("Make sure Streamlit is installed and the frontend.py file exists.")
