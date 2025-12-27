@@ -8,29 +8,31 @@ from selenium import webdriver
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.common.by import By
-from webdriver_manager.firefox import GeckoDriverManager
-from selenium.webdriver.firefox.service import Service
-from modules.Lead import Lead
 import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import os
+try:
+    
+    from .shared_log import log_status, LOG_QUEUE
+    
+except (ImportError, ValueError):
+    import sys
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    
+    from modules.shared_log import log_status, LOG_QUEUE
 ## 1. ScrapingHandler Class (Maira's Task)
-import queue
-# Initialize the log queue globally
-LOG_QUEUE = queue.Queue()
-
-def log_status(message: str):
-    """Safely puts a status message into the queue for Streamlit to read."""
-    LOG_QUEUE.put(message)
 
 class ScrapingHandler:
     """
     Handles the web scraping process, making requests and returning
     the raw HTML content.
     """
-    
+    MAX_RESULTS=20
     BASE_URL: str = "https://duckduckgo.com/?q="  # Placeholder URL
     HEADERS: Dict[str, str] = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -47,8 +49,7 @@ class ScrapingHandler:
         """
         try:
             options=Options()
-            service = Service(GeckoDriverManager().install())
-            driver = webdriver.Firefox(service=service, options=options)
+            driver = webdriver.Firefox(options=options)
 
             driver.get(url)
             time.sleep(1)
@@ -98,7 +99,7 @@ class ScrapingHandler:
         finally:
             driver.quit()
 
-    def scrape_keyword(self, keyword: str,max_results: int = 5) -> list[str]:
+    def scrape_keyword(self, keyword: str ) -> list[str]:
         """
         Constructs the search URL for a given keyword and fetches the HTML content.
         """
@@ -108,7 +109,7 @@ class ScrapingHandler:
                 
                 log_status(f"🔍 Starting scrape for keyword: '{keyword}'")
                 
-                return self.make_request(full_url,max_results)
+                return self.make_request(full_url,self.MAX_RESULTS)
         except Exception as e:
                 log_status(f"❌ Error during scraping for keyword '{keyword}': {e}")
                 return None

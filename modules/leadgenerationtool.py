@@ -1,51 +1,85 @@
-from modules.scrapinghandler import ScrapingHandler
-from modules.Lead import Lead
-from modules.leadExtractor import LeadExtractor
-# 💥 CRITICAL FIX: Replace TemporaryStorage with the permanent DatabaseManager
-from modules.database_manager import DatabaseManager 
-from modules.keywordmodule import keywordmodule
 from typing import TypeVar
-from modules.shared_log import log_status
+import os
+import threading
+import time
+try:
+    from .scrapinghandler import ScrapingHandler
+    from .leadExtractor import LeadExtractor
+    from .database_manager import DatabaseManager 
+    from .keywordmodule import keywordmodule
+    from .LeadValidator import LeadValidator
+    from .shared_log import log_status, LOG_QUEUE
+    from .Lead import Lead
+except (ImportError, ValueError):
+    import sys
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from modules.scrapinghandler import ScrapingHandler
+    from modules.leadExtractor import LeadExtractor
+    from modules.database_manager import DatabaseManager 
+    from modules.keywordmodule import keywordmodule 
+    from modules.LeadValidator import LeadValidator
+    from modules.shared_log import log_status, LOG_QUEUE
+    from modules.Lead import Lead
 # Define the type alias for clarity
 StorageType = TypeVar('StorageType', bound=DatabaseManager)
 
 class LeadGenerationTool:
-    def __init__(self, input_module: keywordmodule, scraper: ScrapingHandler, storage: StorageType,extractor: LeadExtractor):
+    def __init__(self, input_module: keywordmodule, scraper: ScrapingHandler, storage: StorageType, extractor: LeadExtractor = None, validator: LeadValidator = None):
         """
         Initializes the tool with dependencies.
-        The storage dependency is now explicitly the persistent DatabaseManager.
+        - `extractor` is optional; if not provided, an extractor can be passed per-call to `process_keyword` via `extractor_instance`.
+        - The storage dependency is the persistent DatabaseManager.
+        - The validator is optional; when provided it will be used to validate leads before storage.
         """
         self.input_module = input_module
         self.scraper = scraper
         self.storage = storage 
         self.extractor = extractor
+        self.validator = validator
         log_status("🔧 LeadGenerationTool initialized.")
 
-    def process_keyword(self, keyword: str, max_seed_urls: int = 20, max_retries: int = 2) -> list[Lead]:
+    def process_keyword(self, keyword: str, extractor_instance: LeadExtractor = None, max_seed_urls: int = 3, MAX_DEPTH: int = 2, MAX_VISITS=3) -> list[Lead]:
         """
         Processes a single keyword: scrapes, extracts leads, and stores them.
+        - `extractor_instance` may be provided to override the instance stored on the tool. If omitted, `self.extractor` will be used.
         Retries on timeout/network errors instead of crashing the entire thread.
         Returns the list of newly extracted Leads (objects).
         """
-        for attempt in range(max_retries + 1):
+        for attempt in range(MAX_DEPTH + 1):
             try:
                 # 1. Scrape the content -> Use the passed parameter for flexibility
-                log_status(f"🔍 Starting search and scraping for seed URLs for '{keyword}'... (attempt {attempt + 1}/{max_retries + 1})")
-                clean_urls = self.scraper.scrape_keyword(keyword, max_results=max_seed_urls)
+                log_status(f"🔍 Starting search and scraping for seed URLs for '{keyword}'... (attempt {attempt + 1}/{MAX_DEPTH + 1})")
+                clean_urls = self.scraper.scrape_keyword(keyword)
 
                 if not clean_urls:
                     log_status(f"🛑 Skipping keyword '{keyword}' due to failed scrape (no seed URLs found).")
                     return []
 
-                # 2. Extract results using the integrated self.extractor
+                # 2. Choose extractor (instance param overrides internal extractor)
+                extractor_to_use = extractor_instance or self.extractor
+                if extractor_to_use is None:
+                    log_status(f"🛑 No extractor available to process keyword '{keyword}'.")
+                    return []
+
+                # 3. Extract results
                 log_status(f"🧩 Starting intelligent crawling and extraction from {len(clean_urls)} seed URLs...")
 
-                # Call the extractor using the clean URLs from the scraper (Correct Logic)
-                extracted_leads = self.extractor.intelligent_scraper(clean_urls)
+                extracted_leads = extractor_to_use.intelligent_scraper(clean_urls)
                 
                 valid_leads = [lead for lead in extracted_leads if lead is not None]
-                
-                # 3. Store the extracted leads using the DatabaseManager
+
+                # Optional validation step (only if a validator was provided)
+                if self.validator and valid_leads:
+                    try:
+                        for lead in valid_leads:
+                            # validator may modify lead in-place (sets is_lead_valid etc.)
+                            self.validator.validate_lead(lead)
+                    except Exception as e:
+                        log_status(f"⚠️ Lead validation error: {e}")
+
+                # 4. Store the extracted leads using the DatabaseManager
                 if valid_leads:
                     count = self.storage.add_all_leads(valid_leads) 
                     log_status(f"✅ Successfully extracted and stored {count} leads for '{keyword}'.")
@@ -55,42 +89,13 @@ class LeadGenerationTool:
                 return valid_leads # Return the data collected
                 
             except Exception as e:
-                if attempt < max_retries:
+                if attempt < MAX_DEPTH:
                     log_status(f"⚠️ Timeout/Error on attempt {attempt + 1}: {str(e)[:100]}... Retrying...")
                 else:
-                    log_status(f"⚠️ Skipping keyword '{keyword}' after {max_retries + 1} attempts. Last error: {str(e)[:100]}")
+                    log_status(f"⚠️ Skipping keyword '{keyword}' after {MAX_DEPTH + 1} attempts. Last error: {str(e)[:100]}")
                     return []
         
         return []
-
-
-    # def run(self) -> None:
-    #     """
-    #     Main execution flow of the lead generation process.
-    #     """
-    #     conolse_log("\n--- Starting Lead Generation Process...")
-        
-    #     # 1. Get Keywords
-    #     keywords = self.input_module.get_clean_keywords() 
-        
-    #     if not keywords:
-    #         conolse_log("🛑 No keywords found to process. Exiting.")
-    #         return
-            
-    #     conolse_log(f"📝 Found {len(keywords)} keywords to process.")
-        
-    #     # Optional: Clear old data before starting a new run (Good for testing)
-    #     self.storage.clear_storage()
-        
-    #     # 2. Process each keyword
-    #     for keyword in keywords:
-    #         self.process_keyword(keyword.strip()) 
-        
-    #     # 3. Finalization
-    #     # Use DatabaseManager's method to get the final count
-    #     final_leads_count = len(self.storage.get_all_leads())
-    #     conolse_log(f"\n✅ Lead Generation Process Complete! Total leads stored: {final_leads_count}")
-
 # if __name__ == "__main__":
 #     # Initialize dependencies
 #     input_module = keywordmodule()
@@ -103,21 +108,39 @@ class LeadGenerationTool:
 #     # Get user input and set the keywords list
 #     search_keyword=input("Enter your keywords separated by commas: ")
 #     input_module.keywords=search_keyword.split(",") 
+
     
-#     # Pass dependencies to the constructor
+#     # Pass dependencies to the constructor (extractor is optional but provided here)
 #     lead_tool = LeadGenerationTool(
 #         input_module=input_module, 
 #         scraper=scraper, 
-#         storage=storage
+#         storage=storage,
+#         extractor=extractor
 #     )
-    
-#     # Run the lead generation process
-#     lead_tool.run(extractor_instance=extractor)
-    
-#     # Fetch and conolse_log results from the Database Manager
-#     storage_leads = storage.get_all_leads()
-#     conolse_log("\n--- Final Results from Database ---")
-#     for lead in storage_leads:
-#         # Leads retrieved are ORM objects, so use .to_dict() defined in the ORM model
-#         conolse_log(lead.to_dict()) 
-#     conolse_log("-----------------------------------")
+
+#     # Start a console log_statuser to show queued backend logs in real-time
+#     stop_event = threading.Event()
+#     def _log_statuser():
+#         while not stop_event.is_set() or not LOG_QUEUE.empty():
+#             try:
+#                 msg = LOG_QUEUE.get(timeout=0.5)
+#                 log_status(msg)
+#             except Exception:
+#                 continue
+
+#     t = threading.Thread(target=_log_statuser, daemon=True)
+#     t.start()
+
+#     # Run the lead generation process (uses input_module.keywords set above)
+#     lead1=lead_tool.process_keyword(search_keyword, extractor_instance=extractor)
+#     log_status(f"\nExtracted {len(lead1)} leads for keyword '{search_keyword}'.")    
+
+#     leads_in_db = storage.get_all_leads()
+#     log_status(f"Total leads stored in database: {len(leads_in_db)}")
+#     for lead in leads_in_db:
+#         log_status(f"- {lead.email} (Valid: {lead.website_url})")
+#     # Stop the log_statuser and drain remaining logs
+#     stop_event.set()
+#     t.join()
+
+   

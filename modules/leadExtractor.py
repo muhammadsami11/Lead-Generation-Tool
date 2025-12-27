@@ -1,6 +1,5 @@
+import os
 from bs4 import BeautifulSoup
-from modules.scrapinghandler import ScrapingHandler
-from modules.Lead import Lead
 import datetime
 import requests
 import re
@@ -12,7 +11,22 @@ import datetime
 import lxml
 import random
 import time
-from modules.shared_log import log_status
+try:
+    from .scrapinghandler import ScrapingHandler
+    from .leadExtractor import LeadExtractor
+    from .shared_log import log_status, LOG_QUEUE
+    from .Lead import Lead
+    from .email_utils import Email_Utils
+except (ImportError, ValueError):
+    import sys
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from modules.scrapinghandler import ScrapingHandler
+    from modules.keywordmodule import keywordmodule 
+    from modules.shared_log import log_status, LOG_QUEUE
+    from modules.Lead import Lead
+    from modules.email_utils import Email_Utils
 class LeadExtractor:
     user_agent_pool = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -28,12 +42,14 @@ class LeadExtractor:
 
     cache={}
     BLACKLISTED_DOMAINS = [
-                    'en.wikipedia.org', 
-                    'www.twitter.com', 
-                    'www.facebook.com', 
-                    'www.youtube.com', 
-                    # Add other informational or social sites you don't want to crawl
-                ]
+    'apps.apple.com', 'play.google.com', 'www.reddit.com', 
+    'substack.com', 'en.wikipedia.org', 'twitter.com', 
+    'facebook.com', 'instagram.com', 'pinterest.com',
+    'www.youtube.com', 'youtu.be', 'tiktok.com', 'linkedin.com',
+    'www.amazon.com', 'www.ebay.com', 'www.etsy.com'
+]
+    MAX_VISITS=3
+    MAX_DEPTH=2
     # 1. FIX: Indentation starts here
     def clean_url(self, urls)->list[str]:
         try:
@@ -73,19 +89,40 @@ class LeadExtractor:
                     selected_agent = random.choice(self.user_agent_pool)
                     dynamic_headers = {'User-Agent': selected_agent}
                     lead_instance=requests.get(url,headers=dynamic_headers, timeout=10) 
-                    sleep_time = random.uniform(7, 18) 
+                    sleep_time = random.uniform(1, 4) 
                     time.sleep(sleep_time)
                     if lead_instance.status_code==200:
                         soup=BeautifulSoup(lead_instance.text,'html.parser')
                         title_tag=soup.find('title')
                         title=title_tag.text if title_tag else 'No Title Found'
-                        email_find=soup.get_text()
-                        email=re.findall(r'[a-z0-9]+@[a-z0-9\-\.]+\.(?:com|net|org|co|info|biz)', str(email_find), re.IGNORECASE) # Enhanced Regex
-                        
+                        # Instantiate Email_Utils and pass HTML text (lead_instance.text)
+                        email = Email_Utils().extract_emails_from_html(lead_instance.text)
+
+                        # Instagram extraction: ONLY from anchor hrefs (instagram.com or instagr.am)
+                        # We intentionally removed regex/@-mention fallbacks to avoid noisy/non-link matches.
+                        insta_id = None
+
+                        for a_tag in soup.find_all('a', href=True):
+                            href = a_tag['href']
+                            if 'instagram.com' in href or 'instagr.am' in href:
+                                try:
+                                    parsed_inst = urlparse(href)
+                                    # clean path and remove any trailing/query parts
+                                    path = (parsed_inst.path or '').lstrip('/')
+                                    candidate = path.split('/')[0].split('?')[0].split('#')[0].strip()
+                                    # Filter out non-profile paths and noisy candidates
+                                    blacklist = {'p', 'explore', 'about', 'accounts', 'developer', 'share', 'stories', 'tags', 'directory'}
+                                    if candidate and len(candidate) <= 30 and re.match(r'^[A-Za-z0-9._]+$', candidate) and candidate.lower() not in blacklist and '.' not in candidate:
+                                        insta_id = candidate
+                                        break
+                                except Exception:
+                                    continue
+
                         lead_obj = Lead(
                             title=title,
                             email=email[0] if email else 'No Email Found',
                             website_url=url,
+                            instagram_id=insta_id,
                             scraped_at=datetime.datetime.now().isoformat()
                         )
                         Leads.append(lead_obj)
@@ -149,11 +186,12 @@ class LeadExtractor:
     def bfs(self,graph,start_node:str)->list[Lead]:
         visited=set()
         queue=[]
-        MAX_VISITS=3
+        max_visits=self.MAX_VISITS
+        max_depth=self.MAX_DEPTH
         visits_count=0
         gnode=0
         hscore=self.calculate_heuristic(start_node,"")
-        MAX_DEPTH=2
+        
         fcost=gnode+hscore
         if start_node in self.BLACKLISTED_DOMAINS:
             return None
@@ -163,12 +201,12 @@ class LeadExtractor:
         while queue:
             fcost,current_depth,normalized_url=heapq.heappop(queue)
             log_status(f"Visiting: {normalized_url}")
-            if current_depth >= MAX_DEPTH:
-                log_status(f"🛑 Max Depth ({MAX_DEPTH}) reached at: {normalized_url}")
+            if current_depth >= max_depth:
+                log_status(f"🛑 Max Depth ({max_depth}) reached at: {normalized_url}")
                 continue # Skip processing this node and move to the next in the queue
             visits_count+=1
-            if visits_count>MAX_VISITS:
-                log_status(f"🛑 Max Visits ({MAX_VISITS}) reached. Ending search.")
+            if visits_count>max_visits:
+                log_status(f"🛑 Max Visits ({max_visits}) reached. Ending search.")
                 break
             extracted_leads=self.extract_lead_info([normalized_url])
             if extracted_leads:
@@ -203,20 +241,36 @@ class LeadExtractor:
         """
         Intelligently scrape each URL in result_block.
         Skip individual URLs on timeout instead of crashing the entire batch.
+        Will skip subsequent seed URLs from a domain after a lead (email) has been found there
+        and returns a deduplicated list of leads (unique emails).
         """
         lead_list = []
+        seen_domains = set()
         for url in result_block:
             try:
+                parsed_seed = urlparse(url)
+                seed_domain = parsed_seed.netloc
+
+                if seed_domain in seen_domains:
+                    log_status(f"⚠️ Skipping seed {url} because domain {seed_domain} already produced a lead.")
+                    continue
+
                 log_status(f"🔗 Processing seed URL: {url}")
                 graph = self.Make_A_Graph(url)
                 parsed_url = urlparse(url)
                 full_base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
-                leads = self.bfs(graph, full_base_url)
-                lead_list.append(leads)
+                lead = self.bfs(graph, full_base_url)
+
+                # If BFS found a complete lead, record domain and append
+                if lead is not None and self.lead_is_complete(lead):
+                    lead_list.append(lead)
+                    seen_domains.add(seed_domain)
+                else:
+                    lead_list.append(None)
             except requests.exceptions.Timeout as timeout_e:
                 log_status(f"⏱️ Timeout on {url}: {str(timeout_e)[:80]}. Skipping to next URL...")
-                lead_list.append(None)  # Append None to maintain list integrity
+                lead_list.append(None)
             except requests.exceptions.RequestException as req_e:
                 log_status(f"❌ Network error on {url}: {str(req_e)[:80]}. Skipping to next URL...")
                 lead_list.append(None)
@@ -224,7 +278,24 @@ class LeadExtractor:
                 log_status(f"❌ Error processing {url}: {str(e)[:80]}. Skipping to next URL...")
                 lead_list.append(None)
         
-        return lead_list
+        # Deduplicate by email while preserving order
+        unique_leads = []
+        seen_emails = set()
+        for lead in lead_list:
+            if lead is None:
+                continue
+            email = getattr(lead, 'email', None)
+            if not email:
+                # keep leads with no email as they may still be useful
+                unique_leads.append(lead)
+                continue
+            if email in seen_emails:
+                log_status(f"🔁 Skipping duplicate lead with email: {email}")
+                continue
+            seen_emails.add(email)
+            unique_leads.append(lead)
+
+        return unique_leads
     
     def calculate_heuristic(self, url: str, link_text: str) -> int:
         """Estimates the remaining clicks (h(n)) to find the lead based on commercial footer data."""
@@ -282,7 +353,7 @@ class LeadExtractor:
                     response.raise_for_status()
                     html_content = response.text
                     self.cache[normalized_url]=html_content
-                    sleep_time = random.uniform(7, 18) 
+                    sleep_time = random.uniform(2, 4) 
                     time.sleep(sleep_time)
                     # Check for HTTP errors 
                 except requests.exceptions.RequestException as e:
@@ -340,13 +411,13 @@ class LeadExtractor:
 
 # extractor = LeadExtractor()
 # ScrapingHandler=ScrapingHandler()
-# keywords=["veganskincare","artisnalscents","fitnesscoaches","healthclininc"]
+# keywords=["veganskincare"]
 # for kw in keywords:
-#     links = ScrapingHandler.scrape_keyword(kw,max_results=15)
-# final_lead=extractor.intelligent_scraper(links)
+#     links = ScrapingHandler.scrape_keyword(kw,max_results=10)
+# final_lead=extractor.intelligent_scraper(links,5,2)
 # for lead_obj in final_lead:
 #     if lead_obj is not None:
 #         # Call the .to_dict() method to see the actual contents of the object
-#         print("--- EXTRACTED LEAD DATA ---")
-#         print(lead_obj.to_dict()) 
-#         print("---------------------------")
+#         log_status("--- EXTRACTED LEAD DATA ---")
+#         log_status(lead_obj.to_dict()) 
+#         log_status("---------------------------")

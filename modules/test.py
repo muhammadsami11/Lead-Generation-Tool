@@ -1,5 +1,5 @@
-from modules.database_manager import DatabaseManager 
-from modules.keywordmodule import keywordmodule
+from .database_manager import DatabaseManager 
+from .keywordmodule import keywordmodule
 from typing import TypeVar
 import os
 import sys
@@ -10,7 +10,7 @@ import pandas as pd
 # sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Import the necessary manager class
-from modules.database_manager import DatabaseManager
+from .database_manager import DatabaseManager
 
 def test_database_retrieval():
     """

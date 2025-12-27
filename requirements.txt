@@ -21,3 +21,11 @@ streamlit
 
 # For authentication
 streamlit-authenticator
+
+# Additional runtime dependencies discovered during debugging
+webdriver-manager
+sqlalchemy
+networkx
+lxml
+clean-text
+unidecode

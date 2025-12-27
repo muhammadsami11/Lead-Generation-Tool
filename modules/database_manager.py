@@ -2,7 +2,7 @@ import os
 from typing import List
 from sqlalchemy import create_engine, Column, String, Integer
 from sqlalchemy.orm import sessionmaker, declarative_base
-from modules.Lead import Lead # Import the Lead data model
+from .Lead import Lead # Import the Lead data model
 
 # Define the base class for declarative class definitions
 Base = declarative_base()
